@@ -55,13 +55,13 @@ export default function LoginPage() {
               SplitWise<span className="text-accent">Pro</span>
             </CardTitle>
             <CardDescription className="text-muted-foreground">
-              Simplify your group expenses today.
+              Sign in to manage your shared expenses.
             </CardDescription>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <Button 
-            className="w-full h-12 text-lg font-semibold gap-3" 
+            className="w-full h-12 text-lg font-semibold gap-3 subtle-hover" 
             onClick={handleGoogleLogin}
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -85,8 +85,8 @@ export default function LoginPage() {
             Continue with Google
           </Button>
           <div className="relative text-center text-xs uppercase tracking-widest text-muted-foreground py-2">
-            <span className="bg-card px-2">Secure OAuth Login</span>
-            <div className="absolute top-1/2 left-0 right-0 -z-10 h-px bg-white/5" />
+            <span className="bg-[#0a0d14] px-2 relative z-10">Secure OAuth Login</span>
+            <div className="absolute top-1/2 left-0 right-0 h-px bg-white/5" />
           </div>
         </CardContent>
       </Card>

@@ -4,24 +4,24 @@
 
 @layer base {
   :root {
-    --background: 222 47% 8%;
+    --background: 222 47% 4%;
     --foreground: 213 31% 91%;
-    --card: 222 47% 10%;
+    --card: 222 47% 6%;
     --card-foreground: 213 31% 91%;
-    --popover: 222 47% 8%;
+    --popover: 222 47% 4%;
     --popover-foreground: 213 31% 91%;
     --primary: 161 72% 38%;
     --primary-foreground: 161 72% 5%;
-    --secondary: 222 47% 14%;
+    --secondary: 222 47% 10%;
     --secondary-foreground: 213 31% 91%;
-    --muted: 222 47% 14%;
+    --muted: 222 47% 10%;
     --muted-foreground: 215 20.2% 65.1%;
     --accent: 199 89% 40%;
     --accent-foreground: 213 31% 91%;
     --destructive: 0 84% 60%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217 32% 15%;
-    --input: 217 32% 15%;
+    --border: 217 32% 12%;
+    --input: 217 32% 12%;
     --ring: 161 72% 38%;
     --radius: 1rem;
   }
@@ -41,8 +41,8 @@
 }
 
 .gradient-bg {
-  background: radial-gradient(circle at 0% 0%, hsla(161, 72%, 38%, 0.12), transparent 50%),
-              radial-gradient(circle at 100% 100%, hsla(199, 89%, 40%, 0.12), transparent 50%),
+  background: radial-gradient(circle at 0% 0%, hsla(161, 72%, 38%, 0.1), transparent 50%),
+              radial-gradient(circle at 100% 100%, hsla(199, 89%, 40%, 0.1), transparent 50%),
               hsl(var(--background));
 }
 
@@ -50,7 +50,7 @@
   @apply transition-all duration-300 hover:brightness-90 active:scale-[0.98] cursor-pointer;
 }
 
-/* Custom scrollbar for emerald theme */
+/* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
 }
