@@ -11,6 +11,8 @@ import { Plus, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useFirestore } from '@/firebase';
 import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
 interface ExpenseFormProps {
   group: any;
@@ -67,9 +69,9 @@ export function ExpenseForm({ group, members, currentUser }: ExpenseFormProps) {
       groupId: group.id,
       description,
       totalAmount,
-      amount: totalAmount, // Compatibility
+      amount: totalAmount,
       paidById: paidBy,
-      paidBy: paidBy, // Compatibility
+      paidBy: paidBy,
       expenseDate: new Date().toISOString(),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -77,16 +79,18 @@ export function ExpenseForm({ group, members, currentUser }: ExpenseFormProps) {
       groupMembers: group.members
     };
 
-    try {
-      await setDoc(expenseRef, expenseData);
-      toast({ title: 'Expense added!', description: `Successfully recorded "${description}"` });
-      setOpen(false);
-      reset();
-    } catch (error: any) {
-      toast({ variant: 'destructive', title: 'Error', description: error.message });
-    } finally {
-      setLoading(false);
-    }
+    setDoc(expenseRef, expenseData).catch(async (err) => {
+      errorEmitter.emit('permission-error', new FirestorePermissionError({
+        path: expenseRef.path,
+        operation: 'create',
+        requestResourceData: expenseData
+      }));
+    });
+
+    toast({ title: 'Expense added!', description: `Successfully recorded "${description}"` });
+    setOpen(false);
+    reset();
+    setLoading(false);
   };
 
   const reset = () => {

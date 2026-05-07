@@ -9,6 +9,8 @@ import { parseNaturalLanguageExpense } from '@/ai/flows/natural-language-expense
 import { useToast } from '@/hooks/use-toast';
 import { useFirestore } from '@/firebase';
 import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
 interface AIExpenseFormProps {
   group: any;
@@ -48,7 +50,7 @@ export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
       const expenseId = doc(collection(db, 'groups', group.id, 'expenses')).id;
       const expenseRef = doc(db, 'groups', group.id, 'expenses', expenseId);
 
-      await setDoc(expenseRef, {
+      const expenseData = {
         id: expenseId,
         groupId: group.id,
         description: result.description,
@@ -61,13 +63,25 @@ export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
         updatedAt: serverTimestamp(),
         participants,
         groupMembers: group.members
+      };
+
+      setDoc(expenseRef, expenseData).catch(async (err) => {
+        errorEmitter.emit('permission-error', new FirestorePermissionError({
+          path: expenseRef.path,
+          operation: 'create',
+          requestResourceData: expenseData
+        }));
       });
 
       toast({ title: 'AI successfully parsed expense!', description: `Recorded "${result.description}" for $${result.amount}` });
       setOpen(false);
       setInput('');
     } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Parsing failed', description: err.message || 'Could not understand the command.' });
+      toast({ 
+        variant: 'destructive', 
+        title: 'Magic Parse Failed', 
+        description: err.message || 'Check your Gemini API Key or try a clearer description.' 
+      });
     } finally {
       setLoading(false);
     }

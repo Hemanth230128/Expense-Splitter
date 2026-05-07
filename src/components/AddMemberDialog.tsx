@@ -9,6 +9,8 @@ import { UserPlus, Loader2, Search, Mail } from 'lucide-react';
 import { useFirestore } from '@/firebase';
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
 interface AddMemberDialogProps {
   groupId: string;
@@ -32,7 +34,15 @@ export function AddMemberDialog({ groupId, groupName, currentMembers }: AddMembe
       // 1. Find user by email
       const usersRef = collection(db, 'users');
       const q = query(usersRef, where('email', '==', email.toLowerCase().trim()));
-      const querySnapshot = await getDocs(q);
+      
+      const querySnapshot = await getDocs(q).catch(async (err) => {
+        const permissionError = new FirestorePermissionError({
+          path: 'users',
+          operation: 'list',
+        });
+        errorEmitter.emit('permission-error', permissionError);
+        throw err;
+      });
 
       if (querySnapshot.empty) {
         throw new Error('User not found. They must sign up for SplitWisePro first.');
@@ -45,27 +55,41 @@ export function AddMemberDialog({ groupId, groupName, currentMembers }: AddMembe
         throw new Error('User is already a member of this group.');
       }
 
-      // 2. Update Group document's members map (for rules & listing)
+      // 2. Update Group document's members map
       const groupRef = doc(db, 'groups', groupId);
       const updatedMembers = {
         ...currentMembers,
         [userId]: 'member'
       };
 
-      await updateDoc(groupRef, {
+      updateDoc(groupRef, {
         members: updatedMembers,
         updatedAt: serverTimestamp()
+      }).catch(async (err) => {
+        errorEmitter.emit('permission-error', new FirestorePermissionError({
+          path: groupRef.path,
+          operation: 'update',
+          requestResourceData: { members: updatedMembers }
+        }));
       });
 
       // 3. Create membership document in subcollection
       const memberRef = doc(db, 'groups', groupId, 'members', userId);
-      await setDoc(memberRef, {
+      const memberData = {
         id: userId,
         groupId,
         userId: userId,
         nickname: foundUser.displayName || email.split('@')[0],
         joinedAt: serverTimestamp(),
-        groupMembers: updatedMembers // Denormalized for security rules
+        groupMembers: updatedMembers
+      };
+
+      setDoc(memberRef, memberData).catch(async (err) => {
+        errorEmitter.emit('permission-error', new FirestorePermissionError({
+          path: memberRef.path,
+          operation: 'create',
+          requestResourceData: memberData
+        }));
       });
 
       toast({ 
@@ -75,11 +99,14 @@ export function AddMemberDialog({ groupId, groupName, currentMembers }: AddMembe
       setOpen(false);
       setEmail('');
     } catch (error: any) {
-      toast({ 
-        variant: 'destructive', 
-        title: 'Failed to add member', 
-        description: error.message 
-      });
+      // Only toast non-permission errors as those are handled by the emitter
+      if (!error.message?.includes('permissions')) {
+        toast({ 
+          variant: 'destructive', 
+          title: 'Action Failed', 
+          description: error.message 
+        });
+      }
     } finally {
       setLoading(false);
     }

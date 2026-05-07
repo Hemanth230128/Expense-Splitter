@@ -14,6 +14,8 @@ import { History, LayoutDashboard, ArrowLeft, ArrowUpDown, Calendar, DollarSign,
 import { useUser, useFirestore, useDoc, useCollection, useMemoFirebase } from '@/firebase';
 import { doc, collection, query, orderBy, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
 export default function GroupPage() {
   const { id } = useParams();
@@ -60,7 +62,7 @@ export default function GroupPage() {
     );
   }
 
-  const handleRecordSettlement = async (tx: any) => {
+  const handleRecordSettlement = (tx: any) => {
     if (!db || !id) return;
 
     const settlementId = doc(collection(db, 'groups', id as string, 'settlements')).id;
@@ -80,12 +82,15 @@ export default function GroupPage() {
       groupMembers: group.members
     };
 
-    try {
-      await setDoc(settlementRef, settlementData);
-      toast({ title: 'Settlement recorded!', description: `${tx.fromName} paid ${tx.toName} $${tx.amount.toFixed(2)}` });
-    } catch (error: any) {
-      toast({ variant: 'destructive', title: 'Error', description: error.message });
-    }
+    setDoc(settlementRef, settlementData).catch(async (err) => {
+      errorEmitter.emit('permission-error', new FirestorePermissionError({
+        path: settlementRef.path,
+        operation: 'create',
+        requestResourceData: settlementData
+      }));
+    });
+
+    toast({ title: 'Settlement recorded!', description: `${tx.fromName} paid ${tx.toName} $${tx.amount.toFixed(2)}` });
   };
 
   const sortedExpenses = [...(expenses || [])].sort((a, b) => {

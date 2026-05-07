@@ -11,50 +11,34 @@ service cloud.firestore {
      * (copied) directly onto every document within a group's hierarchy.
      * 
      * Data Structure:
-     * - /users/{userId}: Private user profiles, restricted to the account owner.
+     * - /users/{userId}: Private user profiles, but searchable by email for invitations.
      * - /groups/{groupId}: Collaborative expense groups. Contains a 'members' map of UIDs to roles.
      * - /groups/{groupId}/[subcollections]: Expenses, Members, Settlements, and Shares. 
      *   Each document contains a 'groupMembers' map for immediate authorization.
-     * 
-     * Key Security Decisions:
-     * - No get() calls: All authorization logic relies on the data present in the document being 
-     *   accessed (resource.data) and the user's auth context (request.auth).
-     * - Role-Based Access: Updates to group metadata or memberships are restricted to users 
-     *   with the 'admin' role in the denormalized members map.
-     * - Relational Integrity: On creation, documents must include a field (e.g., creatorId, 
-     *   userId, groupId) that matches the context of the request to prevent data spoofing.
-     * - Prototyping Mode: Rules strictly enforce 'who' can access data but remain flexible 
-     *   on 'what' the data looks like, allowing for rapid schema iteration.
      */
 
     // --- Helper Functions ---
 
-    /** Checks if the user is authenticated. */
     function isSignedIn() {
       return request.auth != null;
     }
 
-    /** Checks if the authenticated user's UID matches the provided userId. */
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    /** Checks if a user is a member of a group based on a denormalized members map. */
     function isMember(membersMap) {
       return isSignedIn() && membersMap != null && membersMap[request.auth.uid] != null;
     }
 
-    /** Checks if a user is an admin of a group based on a denormalized members map. */
     function isAdmin(membersMap) {
-      return isSignedIn() && membersMap != null && membersMap[request.auth.uid] == 'admin';
+      return isSignedIn() && membersMap != null && (membersMap[request.auth.uid] == 'admin');
     }
 
-    /** Verifies document ownership and existence for destructive operations. */
     function isExistingOwner(userId) {
       return resource != null && isOwner(userId);
     }
 
-    /** Verifies group membership and existence for destructive operations. */
     function isExistingMember(membersMap) {
       return resource != null && isMember(membersMap);
     }
@@ -64,12 +48,12 @@ service cloud.firestore {
     /**
      * @description Rules for individual user profiles.
      * @path /users/{userId}
-     * @allow Authenticated user (create/get/list/update/delete) where userId matches auth.uid.
-     * @deny Any user attempting to access a different user's profile.
-     * @principle Strict ownership model for private user data.
+     * @allow Authenticated users can get and list to allow searching for members by email.
+     * @principle Allow searchability while protecting write access.
      */
     match /users/{userId} {
-      allow get, list: if isOwner(userId);
+      // Allow searching and viewing profiles so users can invite each other by email
+      allow get, list: if isSignedIn();
       allow create: if isOwner(userId);
       allow update: if isExistingOwner(userId);
       allow delete: if isExistingOwner(userId);
@@ -78,9 +62,6 @@ service cloud.firestore {
     /**
      * @description Rules for collaborative expense groups.
      * @path /groups/{groupId}
-     * @allow Group members (get/list); Admins (update/delete); Any signed-in user (create).
-     * @deny Non-members attempting to read group details; Non-admins attempting to modify groups.
-     * @principle Shared access via denormalized member maps and role-based write permissions.
      */
     match /groups/{groupId} {
       allow get: if isMember(resource.data.members);
@@ -89,13 +70,6 @@ service cloud.firestore {
       allow update: if isExistingMember(resource.data.members) && isAdmin(resource.data.members);
       allow delete: if isExistingMember(resource.data.members) && isAdmin(resource.data.members);
 
-      /**
-       * @description Rules for group membership records.
-       * @path /groups/{groupId}/members/{memberUserId}
-       * @allow Group members (get/list); Admins (create/update/delete).
-       * @deny Unauthorized users or non-admins modifying the member list.
-       * @principle Subcollection security using denormalized parent context (groupMembers map).
-       */
       match /members/{memberUserId} {
         allow get: if isMember(resource.data.groupMembers);
         allow list: if isSignedIn();
@@ -104,13 +78,6 @@ service cloud.firestore {
         allow delete: if isExistingMember(resource.data.groupMembers) && isAdmin(resource.data.groupMembers);
       }
 
-      /**
-       * @description Rules for expenses within a group.
-       * @path /groups/{groupId}/expenses/{expenseId}
-       * @allow Any group member (get/list/create/update/delete).
-       * @deny Anyone outside the group attempting to view or record expenses.
-       * @principle Group-wide collaborative access to financial records.
-       */
       match /expenses/{expenseId} {
         allow get: if isMember(resource.data.groupMembers);
         allow list: if isSignedIn();
@@ -118,13 +85,6 @@ service cloud.firestore {
         allow update: if isExistingMember(resource.data.groupMembers);
         allow delete: if isExistingMember(resource.data.groupMembers);
 
-        /**
-         * @description Rules for individual shares of a specific expense.
-         * @path /groups/{groupId}/expenses/{expenseId}/shares/{userId}
-         * @allow Group members (get/list/create/update/delete).
-         * @deny Non-group members.
-         * @principle Deeply nested relational integrity verified via denormalized membership and path IDs.
-         */
         match /shares/{userId} {
           allow get: if isMember(resource.data.groupMembers);
           allow list: if isSignedIn();
@@ -134,13 +94,6 @@ service cloud.firestore {
         }
       }
 
-      /**
-       * @description Rules for settlements (payments) between group members.
-       * @path /groups/{groupId}/settlements/{settlementId}
-       * @allow Group members (get/list/create/update/delete).
-       * @deny Non-group members.
-       * @principle Ensures financial settlements are only visible and manageable by involved group peers.
-       */
       match /settlements/{settlementId} {
         allow get: if isMember(resource.data.groupMembers);
         allow list: if isSignedIn();
