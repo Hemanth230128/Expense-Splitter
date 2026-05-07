@@ -45,32 +45,37 @@ export function calculateSimplifiedDebts(balances: NetBalance[]): SuggestedTrans
 export function getGroupBalances(members: any[], expenses: any[], settlements: any[]): NetBalance[] {
   const balanceMap = new Map<string, number>();
   
+  // Initialize with all members
   members.forEach(m => balanceMap.set(m.id, 0));
 
   expenses.forEach(exp => {
+    const paidBy = exp.paidById || exp.paidBy;
     // Payer is owed the total minus their own share
-    const payerBalance = balanceMap.get(exp.paidBy) || 0;
-    balanceMap.set(exp.paidBy, payerBalance + exp.amount);
+    const payerBalance = balanceMap.get(paidBy) || 0;
+    balanceMap.set(paidBy, payerBalance + exp.amount);
 
     // Participants owe their share
-    exp.participants.forEach((p: any) => {
+    (exp.participants || []).forEach((p: any) => {
       const current = balanceMap.get(p.userId) || 0;
       balanceMap.set(p.userId, current - p.amount);
     });
   });
 
   settlements.forEach(set => {
+    const payerId = set.payerId || set.from;
+    const receiverId = set.receiverId || set.to;
+    
     // 'From' paid 'To', so 'From' is less in debt, 'To' is less owed
-    const fromBal = balanceMap.get(set.from) || 0;
-    balanceMap.set(set.from, fromBal + set.amount);
+    const fromBal = balanceMap.get(payerId) || 0;
+    balanceMap.set(payerId, fromBal + set.amount);
 
-    const toBal = balanceMap.get(set.to) || 0;
-    balanceMap.set(set.to, toBal - set.amount);
+    const toBal = balanceMap.get(receiverId) || 0;
+    balanceMap.set(receiverId, toBal - set.amount);
   });
 
   return Array.from(balanceMap.entries()).map(([userId, balance]) => ({
     userId,
-    userName: members.find(m => m.id === userId)?.name || 'Unknown',
+    userName: members.find(m => m.id === userId)?.name || 'Unknown User',
     balance: Number(balance.toFixed(2))
   }));
 }

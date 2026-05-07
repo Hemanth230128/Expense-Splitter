@@ -40,8 +40,12 @@ export default function GroupPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const balances = useMemo(() => {
-    if (!members || !expenses || !settlements) return [];
-    const memberList = members.map(m => ({ id: m.userId, name: m.nickname || 'Unknown' }));
+    if (!members) return [];
+    // Map members to a stable list for balance calculation
+    const memberList = (members || []).map(m => ({ 
+      id: m.userId || m.id, 
+      name: m.nickname || 'Unknown Member' 
+    }));
     return getGroupBalances(memberList, expenses || [], settlements || []);
   }, [members, expenses, settlements]);
 

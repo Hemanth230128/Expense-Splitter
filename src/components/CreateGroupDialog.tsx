@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,7 @@ export function CreateGroupDialog() {
   const { user } = useUser();
   const db = useFirestore();
   const { toast } = useToast();
+  const router = useRouter();
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,21 +48,24 @@ export function CreateGroupDialog() {
       // 1. Create parent group doc
       await setDoc(groupRef, groupData);
       
-      // 2. Create membership doc in subcollection
+      // 2. Create membership doc in subcollection with explicit nickname
       const memberRef = doc(db, 'groups', groupId, 'members', user.uid);
       await setDoc(memberRef, {
         id: user.uid,
         groupId,
         userId: user.uid,
-        nickname: user.displayName || 'You',
+        nickname: user.displayName || user.email?.split('@')[0] || 'You',
         joinedAt: serverTimestamp(),
-        groupMembers: membersMap // Denormalized for rules
+        groupMembers: membersMap // Denormalized for security rules
       });
 
       toast({ title: "Group Created!", description: `"${name}" is ready for expenses.` });
       setOpen(false);
       setName('');
       setDescription('');
+      
+      // Redirect to the new group
+      router.push(`/groups/${groupId}`);
     } catch (error: any) {
       toast({ variant: 'destructive', title: 'Error', description: error.message });
     } finally {
