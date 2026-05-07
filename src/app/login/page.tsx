@@ -6,12 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useAuth, useUser } from '@/firebase';
+import { useAuth, useUser, useFirestore } from '@/firebase';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
   updateProfile
 } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { Wallet, Loader2, Mail, Lock, User as UserIcon } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -19,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 export default function LoginPage() {
   const { user, isUserLoading } = useUser();
   const auth = useAuth();
+  const db = useFirestore();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -55,9 +57,22 @@ export default function LoginPage() {
     setIsLoading(true);
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const newUser = userCredential.user;
+      
       if (displayName) {
-        await updateProfile(userCredential.user, { displayName });
+        await updateProfile(newUser, { displayName });
       }
+
+      // Save user profile to Firestore for member lookups
+      const userRef = doc(db, 'users', newUser.uid);
+      await setDoc(userRef, {
+        id: newUser.uid,
+        email: newUser.email,
+        displayName: displayName || newUser.email?.split('@')[0] || 'User',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
       toast({ title: "Account created!", description: "Welcome to SplitWisePro." });
     } catch (error: any) {
       toast({ 

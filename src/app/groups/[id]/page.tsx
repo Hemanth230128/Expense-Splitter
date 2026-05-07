@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ExpenseForm } from '@/components/ExpenseForm';
 import { AIExpenseForm } from '@/components/AIExpenseForm';
+import { AddMemberDialog } from '@/components/AddMemberDialog';
 import { BalanceView } from '@/components/BalanceView';
 import { getGroupBalances } from '@/lib/debt-simplifier';
 import { History, LayoutDashboard, ArrowLeft, ArrowUpDown, Calendar, DollarSign, User as UserIcon, Plus, Loader2 } from 'lucide-react';
@@ -38,14 +39,7 @@ export default function GroupPage() {
 
   const balances = useMemo(() => {
     if (!members || !expenses || !settlements) return [];
-    
-    // Convert members list to simple User format for the simplifier
     const memberList = members.map(m => ({ id: m.userId, name: m.nickname || 'Unknown' }));
-    
-    // We need to fetch display names if nicknames aren't set.
-    // In a production app, we'd join with the users collection.
-    // For this MVP, we use the nickname or fallback.
-    
     return getGroupBalances(memberList, expenses || [], settlements || []);
   }, [members, expenses, settlements]);
 
@@ -77,13 +71,13 @@ export default function GroupPage() {
       groupId: id,
       payerId: tx.from,
       receiverId: tx.to,
-      from: tx.from, // Compatibility with lib logic
-      to: tx.to,     // Compatibility with lib logic
+      from: tx.from,
+      to: tx.to,
       amount: tx.amount,
       settlementDate: new Date().toISOString(),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-      groupMembers: group.members // Carry over auth map
+      groupMembers: group.members
     };
 
     try {
@@ -103,7 +97,6 @@ export default function GroupPage() {
       const payerB = members?.find(m => m.userId === b.paidById || m.userId === b.paidBy)?.nickname || '';
       comparison = payerA.localeCompare(payerB);
     }
-    
     return sortOrder === 'asc' ? comparison : -comparison;
   });
 
@@ -132,7 +125,8 @@ export default function GroupPage() {
               </p>
             </div>
           </div>
-          <div className="flex gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+            <AddMemberDialog groupId={group.id} groupName={group.name} currentMembers={group.members} />
             {members && <AIExpenseForm group={group} members={members} />}
             {members && <ExpenseForm group={group} members={members} currentUser={user} />}
           </div>
@@ -151,16 +145,16 @@ export default function GroupPage() {
           <TabsContent value="history" className="space-y-4">
             <div className="flex items-center justify-between bg-card/40 border p-3 rounded-xl">
               <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground px-2">Sort By</span>
-              <div className="flex gap-2">
-                <Button variant={sortBy === 'date' ? 'secondary' : 'ghost'} size="sm" onClick={() => toggleSort('date')} className="h-8 gap-2">
+              <div className="flex gap-2 overflow-x-auto">
+                <Button variant={sortBy === 'date' ? 'secondary' : 'ghost'} size="sm" onClick={() => toggleSort('date')} className="h-8 gap-2 whitespace-nowrap">
                   <Calendar className="h-3.5 w-3.5" /> Date
                   {sortBy === 'date' && <ArrowUpDown className="h-3 w-3" />}
                 </Button>
-                <Button variant={sortBy === 'amount' ? 'secondary' : 'ghost'} size="sm" onClick={() => toggleSort('amount')} className="h-8 gap-2">
+                <Button variant={sortBy === 'amount' ? 'secondary' : 'ghost'} size="sm" onClick={() => toggleSort('amount')} className="h-8 gap-2 whitespace-nowrap">
                   <DollarSign className="h-3.5 w-3.5" /> Amount
                   {sortBy === 'amount' && <ArrowUpDown className="h-3 w-3" />}
                 </Button>
-                <Button variant={sortBy === 'payer' ? 'secondary' : 'ghost'} size="sm" onClick={() => toggleSort('payer')} className="h-8 gap-2">
+                <Button variant={sortBy === 'payer' ? 'secondary' : 'ghost'} size="sm" onClick={() => toggleSort('payer')} className="h-8 gap-2 whitespace-nowrap">
                   <UserIcon className="h-3.5 w-3.5" /> Payer
                   {sortBy === 'payer' && <ArrowUpDown className="h-3 w-3" />}
                 </Button>
