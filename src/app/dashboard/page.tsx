@@ -1,70 +1,81 @@
 "use client";
 
-import { useState } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/card';
-import { mockGroups, currentUser, mockExpenses, mockSettlements } from '@/lib/mock-data';
-import { Users, Plus, TrendingUp, TrendingDown, ChevronRight, UserPlus } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Users, Plus, TrendingUp, TrendingDown, ChevronRight, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import { getGroupBalances } from '@/lib/debt-simplifier';
+import { useUser, useFirestore, useCollection, useMemoFirebase } from '@/firebase';
+import { collection, query, where, serverTimestamp, doc, setDoc } from 'firebase/firestore';
+import { CreateGroupDialog } from '@/components/CreateGroupDialog';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 
 export default function Dashboard() {
-  const [groups, setGroups] = useState(mockGroups);
+  const { user, isUserLoading } = useUser();
+  const db = useFirestore();
+  const router = useRouter();
 
-  const calculateUserOverallBalance = () => {
-    let total = 0;
-    groups.forEach(group => {
-      const balances = getGroupBalances(group.members, mockExpenses.filter(e => e.groupId === group.id), mockSettlements.filter(s => s.groupId === group.id));
-      const userBalance = balances.find(b => b.userId === currentUser.id)?.balance || 0;
-      total += userBalance;
-    });
-    return total;
-  };
+  useEffect(() => {
+    if (!isUserLoading && !user) {
+      router.push('/login');
+    }
+  }, [user, isUserLoading, router]);
 
-  const overallBalance = calculateUserOverallBalance();
+  // Use a proper Firestore query for groups the user is a member of
+  const groupsQuery = useMemoFirebase(() => {
+    if (!db || !user) return null;
+    return query(
+      collection(db, 'groups'),
+      where(`members.${user.uid}`, 'in', ['admin', 'member'])
+    );
+  }, [db, user?.uid]);
+
+  const { data: groups, isLoading: isGroupsLoading } = useCollection(groupsQuery);
+
+  if (isUserLoading || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="animate-spin h-8 w-8 text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Navbar userName={currentUser.name} />
+      <Navbar />
       
       <main className="flex-1 container mx-auto px-4 py-8 space-y-8">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div>
-            <h1 className="text-3xl font-headline font-bold">Welcome back, {currentUser.name.split(' ')[0]}!</h1>
-            <p className="text-muted-foreground">Here's what's happening in your groups.</p>
+            <h1 className="text-3xl font-headline font-bold">Welcome back, {user.displayName?.split(' ')[0]}!</h1>
+            <p className="text-muted-foreground">Manage your shared expenses with ease.</p>
           </div>
           
           <div className="flex items-center gap-4 bg-card/40 border p-4 rounded-2xl backdrop-blur-sm">
             <div className="flex flex-col">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total Balance</span>
-              <span className={`text-2xl font-headline font-bold ${overallBalance >= 0 ? 'text-primary' : 'text-destructive'}`}>
-                {overallBalance >= 0 ? '+' : ''}${Math.abs(overallBalance).toFixed(2)}
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</span>
+              <span className="text-2xl font-headline font-bold text-primary">
+                All Active
               </span>
             </div>
-            <div className={`p-2 rounded-xl ${overallBalance >= 0 ? 'bg-primary/20 text-primary' : 'bg-destructive/20 text-destructive'}`}>
-              {overallBalance >= 0 ? <TrendingUp /> : <TrendingDown />}
+            <div className="p-2 rounded-xl bg-primary/10 text-primary">
+              <TrendingUp className="h-6 w-6" />
             </div>
           </div>
         </header>
 
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <Card className="border-dashed border-2 bg-transparent flex flex-col items-center justify-center p-8 text-center group cursor-pointer hover:border-primary transition-colors">
-            <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-              <Plus className="h-8 w-8 text-muted-foreground group-hover:text-primary transition-colors" />
-            </div>
-            <CardTitle className="mb-2">New Group</CardTitle>
-            <p className="text-sm text-muted-foreground mb-6">Create a shared space for a trip, house, or project.</p>
-            <Button className="w-full">Create Group</Button>
-          </Card>
+          <CreateGroupDialog />
 
-          {groups.map(group => {
-            const balances = getGroupBalances(group.members, mockExpenses.filter(e => e.groupId === group.id), mockSettlements.filter(s => s.groupId === group.id));
-            const userBal = balances.find(b => b.userId === currentUser.id)?.balance || 0;
-            
-            return (
+          {isGroupsLoading ? (
+            <div className="col-span-1 md:col-span-2 flex items-center justify-center p-20">
+              <Loader2 className="animate-spin h-8 w-8 text-muted-foreground" />
+            </div>
+          ) : (
+            groups?.map(group => (
               <Link key={group.id} href={`/groups/${group.id}`}>
-                <Card className="h-full glass-card hover:bg-white/5 transition-all group overflow-hidden">
+                <Card className="h-full glass-card subtle-hover group overflow-hidden">
                   <CardHeader className="flex flex-row items-center justify-between pb-2">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center">
@@ -75,30 +86,23 @@ export default function Dashboard() {
                     <ChevronRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
                   </CardHeader>
                   <CardContent>
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {group.members.map(member => (
-                        <div key={member.id} className="w-7 h-7 rounded-full bg-muted border border-background flex items-center justify-center text-[10px] font-bold" title={member.name}>
-                          {member.name.charAt(0)}
-                        </div>
-                      ))}
-                      {group.members.length > 3 && <div className="text-xs text-muted-foreground self-center">+{group.members.length - 3} more</div>}
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs text-muted-foreground uppercase tracking-widest font-semibold">Your Standing</p>
-                      {userBal === 0 ? (
-                        <p className="text-sm font-medium">You are all settled up</p>
-                      ) : (
-                        <p className={`text-lg font-bold ${userBal > 0 ? 'text-primary' : 'text-destructive'}`}>
-                          {userBal > 0 ? 'You are owed' : 'You owe'} ${Math.abs(userBal).toFixed(2)}
-                        </p>
-                      )}
+                    <p className="text-sm text-muted-foreground line-clamp-2 mb-4">
+                      {group.description || 'No description provided.'}
+                    </p>
+                    <div className="flex items-center justify-between mt-auto">
+                      <div className="text-xs font-bold uppercase tracking-widest text-primary/80">
+                        {Object.keys(group.members || {}).length} Members
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">
+                        Created {new Date(group.createdAt?.seconds * 1000).toLocaleDateString()}
+                      </div>
                     </div>
                   </CardContent>
                   <div className="h-1 w-full bg-gradient-to-r from-primary to-accent opacity-0 group-hover:opacity-100 transition-opacity" />
                 </Card>
               </Link>
-            );
-          })}
+            ))
+          )}
         </section>
       </main>
     </div>
