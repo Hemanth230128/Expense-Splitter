@@ -33,7 +33,8 @@ export function AddMemberDialog({ groupId, groupName, currentMembers }: AddMembe
     try {
       // 1. Find user by email
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', email.toLowerCase().trim()));
+      const normalizedEmail = email.toLowerCase().trim();
+      const q = query(usersRef, where('email', '==', normalizedEmail));
       
       const querySnapshot = await getDocs(q).catch(async (err) => {
         const permissionError = new FirestorePermissionError({
@@ -62,7 +63,7 @@ export function AddMemberDialog({ groupId, groupName, currentMembers }: AddMembe
         [userId]: 'member'
       };
 
-      updateDoc(groupRef, {
+      await updateDoc(groupRef, {
         members: updatedMembers,
         updatedAt: serverTimestamp()
       }).catch(async (err) => {
@@ -84,7 +85,7 @@ export function AddMemberDialog({ groupId, groupName, currentMembers }: AddMembe
         groupMembers: updatedMembers
       };
 
-      setDoc(memberRef, memberData).catch(async (err) => {
+      await setDoc(memberRef, memberData).catch(async (err) => {
         errorEmitter.emit('permission-error', new FirestorePermissionError({
           path: memberRef.path,
           operation: 'create',
@@ -99,7 +100,6 @@ export function AddMemberDialog({ groupId, groupName, currentMembers }: AddMembe
       setOpen(false);
       setEmail('');
     } catch (error: any) {
-      // Only toast non-permission errors as those are handled by the emitter
       if (!error.message?.includes('permissions')) {
         toast({ 
           variant: 'destructive', 

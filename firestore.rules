@@ -9,12 +9,6 @@ service cloud.firestore {
      * This ruleset implements an "Authorization Independence" model. To ensure high performance and 
      * avoid costly cross-document lookups (get() calls), group membership and roles are denormalized 
      * (copied) directly onto every document within a group's hierarchy.
-     * 
-     * Data Structure:
-     * - /users/{userId}: Private user profiles, but searchable by email for invitations.
-     * - /groups/{groupId}: Collaborative expense groups. Contains a 'members' map of UIDs to roles.
-     * - /groups/{groupId}/[subcollections]: Expenses, Members, Settlements, and Shares. 
-     *   Each document contains a 'groupMembers' map for immediate authorization.
      */
 
     // --- Helper Functions ---
@@ -48,12 +42,12 @@ service cloud.firestore {
     /**
      * @description Rules for individual user profiles.
      * @path /users/{userId}
-     * @allow Authenticated users can get and list to allow searching for members by email.
-     * @principle Allow searchability while protecting write access.
+     * @allow Authenticated users can read (get/list) to allow searching by email.
      */
     match /users/{userId} {
       // Allow searching and viewing profiles so users can invite each other by email
-      allow get, list: if isSignedIn();
+      allow read: if isSignedIn();
+      // Only the user themselves can create or modify their profile
       allow create: if isOwner(userId);
       allow update: if isExistingOwner(userId);
       allow delete: if isExistingOwner(userId);
