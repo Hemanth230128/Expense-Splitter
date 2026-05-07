@@ -7,7 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { BrainCircuit, Loader2, Wand2 } from 'lucide-react';
 import { parseNaturalLanguageExpense } from '@/ai/flows/natural-language-expense-input';
 import { useToast } from '@/hooks/use-toast';
-import { useFirestore } from '@/firebase';
+import { useFirestore, useUser } from '@/firebase';
 import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
@@ -23,14 +23,19 @@ export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const db = useFirestore();
+  const { user } = useUser();
 
   const handleAIParse = async () => {
-    if (!input || !db) return;
+    if (!input || !db || !user) return;
     setLoading(true);
     try {
+      const currentUserMember = members.find(m => m.userId === user.uid);
+      const currentUserName = currentUserMember?.nickname || user.displayName || 'Me';
+
       const result = await parseNaturalLanguageExpense({
         expenseString: input,
-        groupMembers: members.map(m => m.nickname || 'Unknown')
+        groupMembers: members.map(m => m.nickname || 'Unknown'),
+        currentUserName: currentUserName
       });
 
       const payer = members.find(m => (m.nickname || '').toLowerCase() === result.paidBy.toLowerCase());
@@ -46,6 +51,10 @@ export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
         const splitAmount = result.amount / result.participants.length;
         return { userId: member.userId, amount: splitAmount };
       }).filter(p => p !== null);
+
+      if (participants.length === 0) {
+        throw new Error("No valid group members identified as participants.");
+      }
 
       const expenseId = doc(collection(db, 'groups', group.id, 'expenses')).id;
       const expenseRef = doc(db, 'groups', group.id, 'expenses', expenseId);
