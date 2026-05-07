@@ -275,7 +275,8 @@
   "auth": {
     "providers": [
       "password",
-      "anonymous"
+      "anonymous",
+      "google.com"
     ]
   },
   "firestore": {
@@ -287,11 +288,11 @@
           "schema": {
             "$ref": "#/backend/entities/User"
           },
-          "description": "Stores individual user profiles. Access is restricted to the owner matching `request.auth.uid`. The document ID is the user's Firebase Authentication UID.",
+          "description": "Stores individual user profiles.",
           "params": [
             {
               "name": "userId",
-              "description": "The unique ID of the user, matching their Firebase Authentication UID."
+              "description": "The unique ID of the user."
             }
           ]
         }
@@ -303,7 +304,7 @@
           "schema": {
             "$ref": "#/backend/entities/Group"
           },
-          "description": "Represents a collaborative group for splitting expenses. Includes denormalized 'members' map (e.g., `members: {userId1: 'admin', userId2: 'member'}`) for authorization independence, allowing direct query of groups a user is part of and securing subcollections without `get()` calls. The `creatorId` field specifies the user who initially created the group.",
+          "description": "Represents a collaborative group.",
           "params": [
             {
               "name": "groupId",
@@ -311,92 +312,7 @@
             }
           ]
         }
-      },
-      {
-        "path": "/groups/{groupId}/members/{memberUserId}",
-        "definition": {
-          "entityName": "groupMember",
-          "schema": {
-            "$ref": "#/backend/entities/GroupMember"
-          },
-          "description": "Represents a user's membership within a specific group. The document ID is the `userId` of the member. This document includes a denormalized 'groupMembers' map (copied from the parent Group) for authorization independence.",
-          "params": [
-            {
-              "name": "groupId",
-              "description": "The unique ID of the parent group."
-            },
-            {
-              "name": "memberUserId",
-              "description": "The unique ID of the user who is a member of this group, serving as the document ID."
-            }
-          ]
-        }
-      },
-      {
-        "path": "/groups/{groupId}/expenses/{expenseId}",
-        "definition": {
-          "entityName": "expense",
-          "schema": {
-            "$ref": "#/backend/entities/Expense"
-          },
-          "description": "Records individual expenses within a group. Includes denormalized 'groupId' and 'groupMembers' map (copied from the parent Group) for authorization independence and QAPs, ensuring only group members can access expenses.",
-          "params": [
-            {
-              "name": "groupId",
-              "description": "The unique ID of the parent group."
-            },
-            {
-              "name": "expenseId",
-              "description": "The unique ID of the expense."
-            }
-          ]
-        }
-      },
-      {
-        "path": "/groups/{groupId}/expenses/{expenseId}/shares/{userId}",
-        "definition": {
-          "entityName": "expenseShare",
-          "schema": {
-            "$ref": "#/backend/entities/ExpenseShare"
-          },
-          "description": "Defines a specific user's share of an expense. The document ID is the `userId` responsible for the share. Includes denormalized 'groupId', 'expenseId', and 'groupMembers' map (copied from the parent Group) for authorization independence.",
-          "params": [
-            {
-              "name": "groupId",
-              "description": "The unique ID of the grandparent group."
-            },
-            {
-              "name": "expenseId",
-              "description": "The unique ID of the parent expense."
-            },
-            {
-              "name": "userId",
-              "description": "The unique ID of the user whose share this is, serving as the document ID."
-            }
-          ]
-        }
-      },
-      {
-        "path": "/groups/{groupId}/settlements/{settlementId}",
-        "definition": {
-          "entityName": "settlement",
-          "schema": {
-            "$ref": "#/backend/entities/Settlement"
-          },
-          "description": "Records payments made between group members to settle debts. Includes denormalized 'groupId' and 'groupMembers' map (copied from the parent Group) for authorization independence and QAPs, ensuring only group members can access settlements.",
-          "params": [
-            {
-              "name": "groupId",
-              "description": "The unique ID of the parent group."
-            },
-            {
-              "name": "settlementId",
-              "description": "The unique ID of the settlement record."
-            }
-          ]
-        }
       }
-    ],
-    "reasoning": "The recommended Firestore structure prioritizes Authorization Independence and QAPs (Queryable Authorization Patterns) through extensive denormalization and structural segregation. \n\n1.  **Authorization Independence (No `get()` in rules):** To strictly adhere to the mandate of avoiding `get()` calls in security rules, the authorization context (i.e., who is a member of a group) is denormalized across all relevant documents. Each `Group` document will contain a `members` map (`{userId: role_string}`). Critically, every document within a group's subcollections (`GroupMember`, `Expense`, `ExpenseShare`, `Settlement`) will also contain a denormalized copy of this `groupMembers` map (or a simplified version indicating current user's membership status for simpler checks). This allows any security rule to evaluate access based solely on the `request.auth.uid` and the `resource.data` of the document being accessed, without needing to `get()` the parent `Group` document. This dramatically simplifies rule writing and debugging.\n\n2.  **QAPs (Secure `list` operations):**\n    *   **User-owned data (`/users/{userId}`):** A user can easily list their own profile by querying `users` where `userId` matches `request.auth.uid` (implicitly handled by path). This is a trivial QAP.\n    *   **Collaborative data (`/groups/{groupId}`):** To enable efficient listing of groups a user is a member of, the `Group` documents contain a `members` map. This allows client-side queries like `db.collection('groups').where('members.request.auth.uid', '==', 'member')` (or `true` if roles are simplified) to securely retrieve only the groups the authenticated user belongs to. This directly supports the QAP requirement for collaborative data without relying on complex and inefficient rule logic or `get()` calls.\n    *   **Nested data (`/groups/{groupId}/expenses`, `/groups/{groupId}/members`, etc.):** Since all subcollection documents (`Expense`, `GroupMember`, `Settlement`, `ExpenseShare`) also contain the denormalized `groupMembers` map, security rules can verify membership directly on the `resource.data` of the document. This ensures that any `list` operation on these subcollections (e.g., listing all expenses for a group) implicitly filters results to only those accessible by the requesting user via a secure rule, assuming the client provides the `{groupId}`. The critical part is that the `groupMembers` map on *each document* ensures the rule can validate membership without a cross-document `get()` for authorization.\n\n3.  **Structural Segregation:** Data with different security postures is kept in separate collections. For instance, user profiles are distinct from collaborative groups. Within groups, members, expenses, shares, and settlements are logically nested and secured consistently by group membership.\n\n4.  **Access Modeling:**\n    *   **Private Data:** `/users/{userId}` ensures strict ownership.\n    *   **Collaborative Data:** `/groups/{groupId}` with the embedded `members` map is the primary model for collaborative authorization. All nested data (`/groups/{groupId}/expenses/{expenseId}`, etc.) inherits and denormalizes this membership context.\n\nThis design mandates atomic writes when group membership changes, as all denormalized `groupMembers` maps must be updated across all affected documents. While increasing write complexity, this drastically simplifies read-time security rules and improves debugging, ensuring a secure and scalable Firestore backend for SplitWisePro."
+    ]
   }
 }
