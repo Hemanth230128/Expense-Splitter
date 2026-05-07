@@ -28,6 +28,10 @@ export function CreateGroupDialog() {
     const groupId = doc(collection(db, 'groups')).id;
     const groupRef = doc(db, 'groups', groupId);
 
+    const membersMap = {
+      [user.uid]: 'admin'
+    };
+
     const groupData = {
       id: groupId,
       name,
@@ -35,9 +39,7 @@ export function CreateGroupDialog() {
       creatorId: user.uid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-      members: {
-        [user.uid]: 'admin'
-      }
+      members: membersMap
     };
 
     try {
@@ -50,8 +52,9 @@ export function CreateGroupDialog() {
         id: user.uid,
         groupId,
         userId: user.uid,
+        nickname: user.displayName || 'You',
         joinedAt: serverTimestamp(),
-        groupMembers: { [user.uid]: 'admin' } // Denormalized for rules
+        groupMembers: membersMap // Denormalized for rules
       });
 
       toast({ title: "Group Created!", description: `"${name}" is ready for expenses.` });

@@ -5,63 +5,69 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { BrainCircuit, Loader2, Wand2 } from 'lucide-react';
-import { Group, User, ExpenseParticipant } from '@/lib/types';
 import { parseNaturalLanguageExpense } from '@/ai/flows/natural-language-expense-input';
 import { useToast } from '@/hooks/use-toast';
+import { useFirestore } from '@/firebase';
+import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 interface AIExpenseFormProps {
-  group: Group;
-  onAdd: (expense: any) => void;
+  group: any;
+  members: any[];
 }
 
-export function AIExpenseForm({ group, onAdd }: AIExpenseFormProps) {
+export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const db = useFirestore();
 
   const handleAIParse = async () => {
-    if (!input) return;
+    if (!input || !db) return;
     setLoading(true);
     try {
       const result = await parseNaturalLanguageExpense({
         expenseString: input,
-        groupMembers: group.members.map(m => m.name)
+        groupMembers: members.map(m => m.nickname || 'Unknown')
       });
 
-      // Find user IDs by matching names
-      const payer = group.members.find(m => m.name.toLowerCase() === result.paidBy.toLowerCase());
-      if (!payer) throw new Error(`Could not find payer: ${result.paidBy}`);
+      const payer = members.find(m => (m.nickname || '').toLowerCase() === result.paidBy.toLowerCase());
+      if (!payer) throw new Error(`Could not find member matching: ${result.paidBy}`);
 
-      const participants: ExpenseParticipant[] = result.participants.map(name => {
-        const user = group.members.find(m => m.name.toLowerCase() === name.toLowerCase());
-        if (!user) return null;
+      const participants = result.participants.map(name => {
+        const member = members.find(m => (m.nickname || '').toLowerCase() === name.toLowerCase());
+        if (!member) return null;
         
-        // If custom split for this person exists in AI result
         const custom = result.customSplits?.find(s => s.member.toLowerCase() === name.toLowerCase());
-        if (custom) return { userId: user.id, amount: custom.amount };
+        if (custom) return { userId: member.userId, amount: custom.amount };
 
-        // Otherwise assume equal split of remainder
-        // This is a simplification; a production app would calculate this more precisely
         const splitAmount = result.amount / result.participants.length;
-        return { userId: user.id, amount: splitAmount };
-      }).filter(p => p !== null) as ExpenseParticipant[];
+        return { userId: member.userId, amount: splitAmount };
+      }).filter(p => p !== null);
 
-      onAdd({
-        id: Math.random().toString(36).substr(2, 9),
+      const expenseId = doc(collection(db, 'groups', group.id, 'expenses')).id;
+      const expenseRef = doc(db, 'groups', group.id, 'expenses', expenseId);
+
+      await setDoc(expenseRef, {
+        id: expenseId,
         groupId: group.id,
         description: result.description,
+        totalAmount: result.amount,
         amount: result.amount,
-        paidBy: payer.id,
+        paidById: payer.userId,
+        paidBy: payer.userId,
+        expenseDate: new Date().toISOString(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
         participants,
-        date: new Date().toISOString()
+        groupMembers: group.members
       });
 
       toast({ title: 'AI successfully parsed expense!', description: `Recorded "${result.description}" for $${result.amount}` });
       setOpen(false);
       setInput('');
     } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Parsing failed', description: err.message || 'Could not understand the command. Try more detail.' });
+      toast({ variant: 'destructive', title: 'Parsing failed', description: err.message || 'Could not understand the command.' });
     } finally {
       setLoading(false);
     }
@@ -82,7 +88,7 @@ export function AIExpenseForm({ group, onAdd }: AIExpenseFormProps) {
         </DialogHeader>
         <div className="space-y-4 py-4">
           <p className="text-sm text-muted-foreground">
-            Just describe what happened. Example: "I paid $45 for pizza for Sarah and Priya. Priya owes $5 extra."
+            Just describe what happened. Example: "I paid $45 for pizza for Sarah and Priya."
           </p>
           <Textarea 
             placeholder="Type your expense details..." 
@@ -90,10 +96,6 @@ export function AIExpenseForm({ group, onAdd }: AIExpenseFormProps) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />
-          <div className="flex gap-2 text-[10px] text-muted-foreground">
-            <span className="font-bold uppercase tracking-widest text-accent/50">Pro Tip:</span>
-            <span>Use member names exactly as they appear in the group.</span>
-          </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>

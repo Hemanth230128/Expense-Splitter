@@ -7,25 +7,28 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Group, User, ExpenseParticipant } from '@/lib/types';
-import { Plus, Info } from 'lucide-react';
+import { Plus, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useFirestore } from '@/firebase';
+import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 interface ExpenseFormProps {
-  group: Group;
-  currentUser: User;
-  onAdd: (expense: any) => void;
+  group: any;
+  members: any[];
+  currentUser: any;
 }
 
-export function ExpenseForm({ group, currentUser, onAdd }: ExpenseFormProps) {
+export function ExpenseForm({ group, members, currentUser }: ExpenseFormProps) {
   const [open, setOpen] = useState(false);
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
-  const [paidBy, setPaidBy] = useState(currentUser.id);
-  const [involvedUsers, setInvolvedUsers] = useState<string[]>(group.members.map(m => m.id));
+  const [paidBy, setPaidBy] = useState(currentUser?.uid || '');
+  const [involvedUsers, setInvolvedUsers] = useState<string[]>(members.map(m => m.userId));
   const [splitType, setSplitType] = useState<'equal' | 'custom'>('equal');
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const db = useFirestore();
 
   useEffect(() => {
     if (splitType === 'equal' && amount && involvedUsers.length > 0) {
@@ -36,15 +39,15 @@ export function ExpenseForm({ group, currentUser, onAdd }: ExpenseFormProps) {
     }
   }, [amount, involvedUsers, splitType]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!description || !amount || involvedUsers.length === 0) {
+    if (!description || !amount || involvedUsers.length === 0 || !db) {
       toast({ variant: 'destructive', title: 'Missing fields', description: 'Please fill all required fields.' });
       return;
     }
 
     const totalAmount = parseFloat(amount);
-    const participants: ExpenseParticipant[] = involvedUsers.map(userId => ({
+    const participants = involvedUsers.map(userId => ({
       userId,
       amount: parseFloat(customAmounts[userId] || '0')
     }));
@@ -55,26 +58,42 @@ export function ExpenseForm({ group, currentUser, onAdd }: ExpenseFormProps) {
       return;
     }
 
-    onAdd({
-      id: Math.random().toString(36).substr(2, 9),
+    setLoading(true);
+    const expenseId = doc(collection(db, 'groups', group.id, 'expenses')).id;
+    const expenseRef = doc(db, 'groups', group.id, 'expenses', expenseId);
+
+    const expenseData = {
+      id: expenseId,
       groupId: group.id,
       description,
-      amount: totalAmount,
-      paidBy,
+      totalAmount,
+      amount: totalAmount, // Compatibility
+      paidById: paidBy,
+      paidBy: paidBy, // Compatibility
+      expenseDate: new Date().toISOString(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
       participants,
-      date: new Date().toISOString()
-    });
+      groupMembers: group.members
+    };
 
-    toast({ title: 'Expense added!', description: `Successfully recorded "${description}"` });
-    setOpen(false);
-    reset();
+    try {
+      await setDoc(expenseRef, expenseData);
+      toast({ title: 'Expense added!', description: `Successfully recorded "${description}"` });
+      setOpen(false);
+      reset();
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: 'Error', description: error.message });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const reset = () => {
     setDescription('');
     setAmount('');
-    setPaidBy(currentUser.id);
-    setInvolvedUsers(group.members.map(m => m.id));
+    setPaidBy(currentUser?.uid || '');
+    setInvolvedUsers(members.map(m => m.userId));
     setSplitType('equal');
     setCustomAmounts({});
   };
@@ -109,8 +128,8 @@ export function ExpenseForm({ group, currentUser, onAdd }: ExpenseFormProps) {
                     <SelectValue placeholder="Select payer" />
                   </SelectTrigger>
                   <SelectContent>
-                    {group.members.map(member => (
-                      <SelectItem key={member.id} value={member.id}>{member.name}</SelectItem>
+                    {members.map(member => (
+                      <SelectItem key={member.userId} value={member.userId}>{member.nickname}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -127,28 +146,28 @@ export function ExpenseForm({ group, currentUser, onAdd }: ExpenseFormProps) {
               </div>
               
               <div className="grid gap-3">
-                {group.members.map(member => (
-                  <div key={member.id} className="flex items-center justify-between">
+                {members.map(member => (
+                  <div key={member.userId} className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Checkbox 
-                        id={`user-${member.id}`} 
-                        checked={involvedUsers.includes(member.id)} 
+                        id={`user-${member.userId}`} 
+                        checked={involvedUsers.includes(member.userId)} 
                         onCheckedChange={(checked) => {
-                          if (checked) setInvolvedUsers([...involvedUsers, member.id]);
-                          else setInvolvedUsers(involvedUsers.filter(id => id !== member.id));
+                          if (checked) setInvolvedUsers([...involvedUsers, member.userId]);
+                          else setInvolvedUsers(involvedUsers.filter(id => id !== member.userId));
                         }} 
                       />
-                      <Label htmlFor={`user-${member.id}`} className="text-sm cursor-pointer">{member.name}</Label>
+                      <Label htmlFor={`user-${member.userId}`} className="text-sm cursor-pointer">{member.nickname}</Label>
                     </div>
-                    {involvedUsers.includes(member.id) && (
+                    {involvedUsers.includes(member.userId) && (
                       <div className="flex items-center gap-1">
                         <span className="text-muted-foreground text-xs">$</span>
                         <Input 
                           className="h-8 w-20 text-right text-xs" 
                           type="number" 
                           step="0.01" 
-                          value={customAmounts[member.id] || ''} 
-                          onChange={(e) => setCustomAmounts({...customAmounts, [member.id]: e.target.value})}
+                          value={customAmounts[member.userId] || ''} 
+                          onChange={(e) => setCustomAmounts({...customAmounts, [member.userId]: e.target.value})}
                           disabled={splitType === 'equal'}
                         />
                       </div>
@@ -161,7 +180,10 @@ export function ExpenseForm({ group, currentUser, onAdd }: ExpenseFormProps) {
           
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit">Save Expense</Button>
+            <Button type="submit" disabled={loading}>
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save Expense
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

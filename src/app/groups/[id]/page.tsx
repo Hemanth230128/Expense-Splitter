@@ -1,59 +1,108 @@
 "use client";
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { mockGroups, currentUser, mockExpenses, mockSettlements } from '@/lib/mock-data';
 import { ExpenseForm } from '@/components/ExpenseForm';
 import { AIExpenseForm } from '@/components/AIExpenseForm';
 import { BalanceView } from '@/components/BalanceView';
 import { getGroupBalances } from '@/lib/debt-simplifier';
-import { History, LayoutDashboard, ArrowLeft, ArrowUpDown, Calendar, DollarSign, User as UserIcon, Plus } from 'lucide-react';
+import { History, LayoutDashboard, ArrowLeft, ArrowUpDown, Calendar, DollarSign, User as UserIcon, Plus, Loader2 } from 'lucide-react';
+import { useUser, useFirestore, useDoc, useCollection, useMemoFirebase } from '@/firebase';
+import { doc, collection, query, orderBy, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 
 export default function GroupPage() {
   const { id } = useParams();
   const router = useRouter();
+  const { user } = useUser();
+  const db = useFirestore();
   const { toast } = useToast();
   
-  const group = mockGroups.find(g => g.id === id);
-  const [expenses, setExpenses] = useState(mockExpenses.filter(e => e.groupId === id));
-  const [settlements, setSettlements] = useState(mockSettlements.filter(s => s.groupId === id));
+  const groupRef = useMemoFirebase(() => db && id ? doc(db, 'groups', id as string) : null, [db, id]);
+  const { data: group, isLoading: isGroupLoading } = useDoc(groupRef);
+
+  const membersRef = useMemoFirebase(() => db && id ? collection(db, 'groups', id as string, 'members') : null, [db, id]);
+  const { data: members, isLoading: isMembersLoading } = useCollection(membersRef);
+
+  const expensesRef = useMemoFirebase(() => db && id ? query(collection(db, 'groups', id as string, 'expenses'), orderBy('expenseDate', 'desc')) : null, [db, id]);
+  const { data: expenses, isLoading: isExpensesLoading } = useCollection(expensesRef);
+
+  const settlementsRef = useMemoFirebase(() => db && id ? query(collection(db, 'groups', id as string, 'settlements'), orderBy('settlementDate', 'desc')) : null, [db, id]);
+  const { data: settlements, isLoading: isSettlementsLoading } = useCollection(settlementsRef);
+
   const [sortBy, setSortBy] = useState<'date' | 'amount' | 'payer'>('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const balances = useMemo(() => {
-    if (!group) return [];
-    return getGroupBalances(group.members, expenses, settlements);
-  }, [group, expenses, settlements]);
+    if (!members || !expenses || !settlements) return [];
+    
+    // Convert members list to simple User format for the simplifier
+    const memberList = members.map(m => ({ id: m.userId, name: m.nickname || 'Unknown' }));
+    
+    // We need to fetch display names if nicknames aren't set.
+    // In a production app, we'd join with the users collection.
+    // For this MVP, we use the nickname or fallback.
+    
+    return getGroupBalances(memberList, expenses || [], settlements || []);
+  }, [members, expenses, settlements]);
 
-  if (!group) return <div>Group not found</div>;
+  if (isGroupLoading || isMembersLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="animate-spin h-8 w-8 text-primary" />
+      </div>
+    );
+  }
 
-  const handleAddExpense = (newExp: any) => {
-    setExpenses([newExp, ...expenses]);
-  };
+  if (!group) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center space-y-4">
+        <h1 className="text-2xl font-bold">Group not found</h1>
+        <Button onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
+      </div>
+    );
+  }
 
-  const handleRecordSettlement = (tx: any) => {
-    const newSet = {
-      id: Math.random().toString(36).substr(2, 9),
-      groupId: group.id,
-      from: tx.from,
-      to: tx.to,
+  const handleRecordSettlement = async (tx: any) => {
+    if (!db || !id) return;
+
+    const settlementId = doc(collection(db, 'groups', id as string, 'settlements')).id;
+    const settlementRef = doc(db, 'groups', id as string, 'settlements', settlementId);
+
+    const settlementData = {
+      id: settlementId,
+      groupId: id,
+      payerId: tx.from,
+      receiverId: tx.to,
+      from: tx.from, // Compatibility with lib logic
+      to: tx.to,     // Compatibility with lib logic
       amount: tx.amount,
-      date: new Date().toISOString()
+      settlementDate: new Date().toISOString(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      groupMembers: group.members // Carry over auth map
     };
-    setSettlements([...settlements, newSet]);
-    toast({ title: 'Settlement recorded!', description: `${tx.fromName} paid ${tx.toName} $${tx.amount.toFixed(2)}` });
+
+    try {
+      await setDoc(settlementRef, settlementData);
+      toast({ title: 'Settlement recorded!', description: `${tx.fromName} paid ${tx.toName} $${tx.amount.toFixed(2)}` });
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: 'Error', description: error.message });
+    }
   };
 
-  const sortedExpenses = [...expenses].sort((a, b) => {
+  const sortedExpenses = [...(expenses || [])].sort((a, b) => {
     let comparison = 0;
-    if (sortBy === 'date') comparison = new Date(a.date).getTime() - new Date(b.date).getTime();
-    else if (sortBy === 'amount') comparison = a.amount - b.amount;
-    else if (sortBy === 'payer') comparison = (group.members.find(m => m.id === a.paidBy)?.name || '').localeCompare(group.members.find(m => m.id === b.paidBy)?.name || '');
+    if (sortBy === 'date') comparison = new Date(a.expenseDate || a.date).getTime() - new Date(b.expenseDate || b.date).getTime();
+    else if (sortBy === 'amount') comparison = (a.totalAmount || a.amount) - (b.totalAmount || b.amount);
+    else if (sortBy === 'payer') {
+      const payerA = members?.find(m => m.userId === a.paidById || m.userId === a.paidBy)?.nickname || '';
+      const payerB = members?.find(m => m.userId === b.paidById || m.userId === b.paidBy)?.nickname || '';
+      comparison = payerA.localeCompare(payerB);
+    }
     
     return sortOrder === 'asc' ? comparison : -comparison;
   });
@@ -68,7 +117,7 @@ export default function GroupPage() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Navbar userName={currentUser.name} />
+      <Navbar />
       
       <main className="flex-1 container mx-auto px-4 py-8 space-y-8">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -78,12 +127,14 @@ export default function GroupPage() {
             </Button>
             <div>
               <h1 className="text-3xl font-headline font-bold">{group.name}</h1>
-              <p className="text-muted-foreground text-sm">{group.members.length} members &bull; {expenses.length} expenses</p>
+              <p className="text-muted-foreground text-sm">
+                {members?.length || 0} members &bull; {expenses?.length || 0} expenses
+              </p>
             </div>
           </div>
           <div className="flex gap-2 w-full sm:w-auto">
-            <AIExpenseForm group={group} onAdd={handleAddExpense} />
-            <ExpenseForm group={group} currentUser={currentUser} onAdd={handleAddExpense} />
+            {members && <AIExpenseForm group={group} members={members} />}
+            {members && <ExpenseForm group={group} members={members} currentUser={user} />}
           </div>
         </div>
 
@@ -122,19 +173,27 @@ export default function GroupPage() {
                   <div key={exp.id} className="glass-card p-4 rounded-2xl flex items-center justify-between hover:border-white/10 transition-colors">
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 rounded-xl bg-white/5 flex flex-col items-center justify-center border border-white/5">
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase">{new Date(exp.date).toLocaleDateString('en-US', { month: 'short' })}</span>
-                        <span className="text-lg font-bold leading-none">{new Date(exp.date).getDate()}</span>
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase">
+                          {new Date(exp.expenseDate || exp.date).toLocaleDateString('en-US', { month: 'short' })}
+                        </span>
+                        <span className="text-lg font-bold leading-none">
+                          {new Date(exp.expenseDate || exp.date).getDate()}
+                        </span>
                       </div>
                       <div>
                         <h4 className="font-bold">{exp.description}</h4>
                         <p className="text-xs text-muted-foreground">
-                          Paid by <span className="text-foreground font-medium">{group.members.find(m => m.id === exp.paidBy)?.name}</span> &bull; 
-                          Split with {exp.participants.length} people
+                          Paid by <span className="text-foreground font-medium">
+                            {members?.find(m => m.userId === (exp.paidById || exp.paidBy))?.nickname || 'Unknown'}
+                          </span> &bull; 
+                          Split with {exp.participants?.length || 0} people
                         </p>
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-xl font-headline font-bold">${exp.amount.toFixed(2)}</div>
+                      <div className="text-xl font-headline font-bold">
+                        ${(exp.totalAmount || exp.amount || 0).toFixed(2)}
+                      </div>
                       <div className="text-[10px] text-muted-foreground uppercase tracking-widest">Total Amount</div>
                     </div>
                   </div>
@@ -146,7 +205,7 @@ export default function GroupPage() {
                 </div>
               )}
 
-              {settlements.map(set => (
+              {(settlements || []).map(set => (
                 <div key={set.id} className="p-4 rounded-2xl border border-dashed border-accent/20 bg-accent/5 flex items-center justify-between opacity-80">
                   <div className="flex items-center gap-4">
                     <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
@@ -155,12 +214,12 @@ export default function GroupPage() {
                     <div>
                       <h4 className="font-medium text-sm">Settlement Recorded</h4>
                       <p className="text-xs text-muted-foreground">
-                        {group.members.find(m => m.id === set.from)?.name} paid {group.members.find(m => m.id === set.to)?.name}
+                        {members?.find(m => m.userId === set.payerId)?.nickname} paid {members?.find(m => m.userId === set.receiverId)?.nickname}
                       </p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-lg font-bold text-accent">${set.amount.toFixed(2)}</div>
+                    <div className="text-lg font-bold text-accent">${(set.amount || 0).toFixed(2)}</div>
                   </div>
                 </div>
               ))}
