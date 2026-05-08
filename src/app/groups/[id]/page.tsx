@@ -5,14 +5,25 @@ import { useParams, useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { ExpenseForm } from '@/components/ExpenseForm';
 import { AIExpenseForm } from '@/components/AIExpenseForm';
 import { AddMemberDialog } from '@/components/AddMemberDialog';
 import { BalanceView } from '@/components/BalanceView';
 import { getGroupBalances } from '@/lib/debt-simplifier';
-import { History, LayoutDashboard, ArrowLeft, ArrowUpDown, Calendar, DollarSign, User as UserIcon, Plus, Loader2 } from 'lucide-react';
+import { History, LayoutDashboard, ArrowLeft, ArrowUpDown, Calendar, DollarSign, User as UserIcon, Plus, Loader2, LogOut, Trash2 } from 'lucide-react';
 import { useUser, useFirestore, useDoc, useCollection, useMemoFirebase } from '@/firebase';
-import { doc, collection, query, orderBy, serverTimestamp, setDoc } from 'firebase/firestore';
+import { doc, collection, query, orderBy, serverTimestamp, setDoc, updateDoc, deleteField, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
@@ -23,21 +34,24 @@ export default function GroupPage() {
   const { user } = useUser();
   const db = useFirestore();
   const { toast } = useToast();
+  const [isLeavingPage, setIsLeavingPage] = useState(false);
   
-  const groupRef = useMemoFirebase(() => db && id ? doc(db, 'groups', id as string) : null, [db, id]);
+  const groupRef = useMemoFirebase(() => db && id && !isLeavingPage ? doc(db, 'groups', id as string) : null, [db, id, isLeavingPage]);
   const { data: group, isLoading: isGroupLoading } = useDoc(groupRef);
 
-  const membersRef = useMemoFirebase(() => db && id ? collection(db, 'groups', id as string, 'members') : null, [db, id]);
+  const membersRef = useMemoFirebase(() => db && id && !isLeavingPage ? collection(db, 'groups', id as string, 'members') : null, [db, id, isLeavingPage]);
   const { data: members, isLoading: isMembersLoading } = useCollection(membersRef);
 
-  const expensesRef = useMemoFirebase(() => db && id ? query(collection(db, 'groups', id as string, 'expenses'), orderBy('expenseDate', 'desc')) : null, [db, id]);
+  const expensesRef = useMemoFirebase(() => db && id && !isLeavingPage ? query(collection(db, 'groups', id as string, 'expenses'), orderBy('expenseDate', 'desc')) : null, [db, id, isLeavingPage]);
   const { data: expenses, isLoading: isExpensesLoading } = useCollection(expensesRef);
 
-  const settlementsRef = useMemoFirebase(() => db && id ? query(collection(db, 'groups', id as string, 'settlements'), orderBy('settlementDate', 'desc')) : null, [db, id]);
+  const settlementsRef = useMemoFirebase(() => db && id && !isLeavingPage ? query(collection(db, 'groups', id as string, 'settlements'), orderBy('settlementDate', 'desc')) : null, [db, id, isLeavingPage]);
   const { data: settlements, isLoading: isSettlementsLoading } = useCollection(settlementsRef);
 
   const [sortBy, setSortBy] = useState<'date' | 'amount' | 'payer'>('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [isExiting, setIsExiting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const balances = useMemo(() => {
     if (!members) return [];
@@ -117,6 +131,71 @@ export default function GroupPage() {
     }
   };
 
+  const isCreator = !!(user?.uid && group?.creatorId === user.uid);
+
+  const handleExitGroup = async () => {
+    if (!db || !id || !user?.uid || isCreator) return;
+    setIsExiting(true);
+    setIsLeavingPage(true);
+    try {
+      const groupRef = doc(db, 'groups', id as string);
+      const memberRef = doc(db, 'groups', id as string, 'members', user.uid);
+
+      await Promise.all([
+        updateDoc(groupRef, {
+          [`members.${user.uid}`]: deleteField(),
+          updatedAt: serverTimestamp(),
+        }),
+        deleteDoc(memberRef),
+      ]);
+
+      toast({ title: 'Exited group', description: 'You have left this group.' });
+      router.push('/dashboard');
+    } catch (error: any) {
+      setIsLeavingPage(false);
+      toast({
+        variant: 'destructive',
+        title: 'Failed to exit group',
+        description: error?.message || 'Please try again.',
+      });
+    } finally {
+      setIsExiting(false);
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!db || !id || !isCreator) return;
+    setIsDeleting(true);
+    setIsLeavingPage(true);
+    try {
+      const groupId = id as string;
+      const groupRef = doc(db, 'groups', groupId);
+      const subcollections = ['members', 'expenses', 'settlements'];
+
+      for (const subcollection of subcollections) {
+        const snapshot = await getDocs(collection(db, 'groups', groupId, subcollection));
+        if (!snapshot.empty) {
+          const batch = writeBatch(db);
+          snapshot.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+          await batch.commit();
+        }
+      }
+
+      await deleteDoc(groupRef);
+      toast({ title: 'Group deleted', description: 'The group and related records were removed.' });
+      router.push('/dashboard');
+    } catch (error: any) {
+      setIsLeavingPage(false);
+      toast({
+        variant: 'destructive',
+        title: 'Failed to delete group',
+        description: error?.message || 'Please try again.',
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
@@ -135,6 +214,51 @@ export default function GroupPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+            {isCreator ? (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" className="gap-2" disabled={isDeleting}>
+                    {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    Delete Group
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete this group?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently remove the group, all expenses, settlements, and members. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleDeleteGroup} className="bg-destructive hover:bg-destructive/90">
+                      Yes, Delete Group
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" className="gap-2" disabled={isExiting}>
+                    {isExiting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                    Exit Group
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Exit this group?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      You will lose access to this group unless another member invites you again.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleExitGroup}>Yes, Exit Group</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
             <AddMemberDialog groupId={group.id} groupName={group.name} currentMembers={group.members} />
             {members && <AIExpenseForm group={group} members={members} />}
             {members && <ExpenseForm group={group} members={members} currentUser={user} />}

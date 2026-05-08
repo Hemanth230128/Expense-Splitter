@@ -18,11 +18,21 @@ const extractAmount = (text: string): number => {
 };
 
 const extractDescription = (text: string): string => {
-  const cleaned = text
-    .replace(/i\s+(have\s+)?paid\s+(?:rs\.?|inr|\$)?\s*\d+(?:\.\d+)?/i, '')
-    .replace(/\s+for\s+[a-z0-9 ,&]+$/i, '')
+  const normalizedText = text.trim();
+  const forMatch = normalizedText.match(/\bfor\s+([^,.]+)(?:\s+for\s+|\s+split\s+|\s+among\s+|\s+between\s+|$)/i);
+  if (forMatch?.[1]) {
+    const candidate = forMatch[1].trim();
+    if (candidate.length >= 2) return candidate;
+  }
+
+  const cleaned = normalizedText
+    .replace(/\b(i|we)\s+(have\s+)?(paid|spent)\b/i, '')
+    .replace(/(?:rs\.?|inr|\$)\s*\d+(?:\.\d+)?/ig, '')
+    .replace(/\b(split|among|between|for|with|and)\b.*$/i, '')
+    .replace(/\s+/g, ' ')
     .trim();
-  return cleaned || 'Expense';
+
+  return cleaned.length > 1 ? cleaned : 'Expense';
 };
 
 const inferPaidBy = (input: ParseExpenseInput): string => {
@@ -42,18 +52,45 @@ const inferParticipants = (input: ParseExpenseInput): string[] => {
   return [input.currentUserName];
 };
 
+const extractCustomSplits = (input: ParseExpenseInput, amount: number) => {
+  const text = input.expenseString;
+  const splits: Array<{ member: string; amount: number }> = [];
+
+  for (const member of input.groupMembers) {
+    const escapedName = member.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const patterns = [
+      new RegExp(`${escapedName}\\s*(?:owes|pays|paid)?\\s*(?:rs\\.?|inr|\\$)?\\s*(\\d+(?:\\.\\d+)?)`, 'i'),
+      new RegExp(`(?:rs\\.?|inr|\\$)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:for|to|by)?\\s*${escapedName}`, 'i'),
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (!match) continue;
+      const parsedAmount = Number(match[1]);
+      if (Number.isFinite(parsedAmount) && parsedAmount >= 0) {
+        splits.push({ member, amount: parsedAmount });
+        break;
+      }
+    }
+  }
+
+  if (splits.length <= 0) return undefined;
+
+  const total = splits.reduce((sum, split) => sum + split.amount, 0);
+  if (amount > 0 && total > amount + 0.01) return undefined;
+
+  return splits;
+};
+
 const fallbackParseExpense = (input: ParseExpenseInput) => {
   const amount = extractAmount(input.expenseString);
   const participants = inferParticipants(input);
+  const customSplits = extractCustomSplits(input, amount > 0 ? amount : 0);
   return {
     description: extractDescription(input.expenseString),
     amount: amount > 0 ? amount : 0,
     paidBy: inferPaidBy(input),
     participants,
-    customSplits: participants.map((member) => ({
-      member,
-      amount: amount > 0 ? Number((amount / participants.length).toFixed(2)) : 0,
-    })),
+    customSplits,
   };
 };
 

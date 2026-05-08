@@ -37,6 +37,15 @@ service cloud.firestore {
       return resource != null && isMember(membersMap);
     }
 
+    function isSelfExitGroupUpdate() {
+      return isSignedIn() &&
+             resource != null &&
+             isMember(resource.data.members) &&
+             request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['members.' + request.auth.uid, 'updatedAt']) &&
+             request.resource.data.members[request.auth.uid] == null;
+    }
+
     // --- Collection Rules ---
 
     /**
@@ -58,10 +67,10 @@ service cloud.firestore {
      * @path /groups/{groupId}
      */
     match /groups/{groupId} {
-      allow get: if isMember(resource.data.members);
+      allow get: if isSignedIn() && (resource == null || isMember(resource.data.members));
       allow list: if isSignedIn(); 
       allow create: if isSignedIn() && request.resource.data.creatorId == request.auth.uid;
-      allow update: if isExistingMember(resource.data.members) && isAdmin(resource.data.members);
+      allow update: if (isExistingMember(resource.data.members) && isAdmin(resource.data.members)) || isSelfExitGroupUpdate();
       allow delete: if isExistingMember(resource.data.members) && isAdmin(resource.data.members);
 
       match /members/{memberUserId} {
@@ -69,7 +78,8 @@ service cloud.firestore {
         allow list: if isSignedIn();
         allow create: if isSignedIn() && isAdmin(request.resource.data.groupMembers);
         allow update: if isExistingMember(resource.data.groupMembers) && isAdmin(resource.data.groupMembers);
-        allow delete: if isExistingMember(resource.data.groupMembers) && isAdmin(resource.data.groupMembers);
+        allow delete: if (isExistingMember(resource.data.groupMembers) && isAdmin(resource.data.groupMembers)) ||
+                      (isExistingMember(resource.data.groupMembers) && memberUserId == request.auth.uid);
       }
 
       match /expenses/{expenseId} {

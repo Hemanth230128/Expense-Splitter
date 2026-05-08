@@ -26,6 +26,63 @@ interface ParsedExpense {
   customSplits?: Array<{ member: string; amount: number }>;
 }
 
+const normalizeName = (value: string) => value.trim().toLowerCase();
+const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const deriveDescriptionFromInput = (text: string): string => {
+  const normalized = text.trim();
+  const forMatch = normalized.match(/\bfor\s+([^,.]+)(?:\s+for\s+|\s+split\s+|\s+among\s+|\s+between\s+|$)/i);
+  if (forMatch?.[1]) {
+    const candidate = forMatch[1].trim();
+    if (candidate.length >= 2) return candidate;
+  }
+
+  const cleaned = normalized
+    .replace(/\b(i|we)\s+(have\s+)?(paid|spent)\b/i, '')
+    .replace(/(?:rs\.?|inr|\$)\s*\d+(?:\.\d+)?/ig, '')
+    .replace(/\b(split|among|between|for|with|and)\b.*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned.length > 1 ? cleaned : 'Expense';
+};
+
+const parseCustomSplitsFromText = (
+  rawInput: string,
+  members: any[]
+): Map<string, number> => {
+  const splitMap = new Map<string, number>();
+
+  for (const member of members) {
+    const nickname = (member.nickname || '').trim();
+    if (!nickname) continue;
+    const escaped = escapeRegExp(nickname);
+
+    const patterns = [
+      // "$80 for test1"
+      new RegExp(`(?:rs\\.?|inr|\\$)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:for|to|by)?\\s*${escaped}\\b`, 'ig'),
+      // "test1 owes $80" / "test1 paid 80"
+      new RegExp(`${escaped}\\b\\s*(?:owes|pays|paid)\\s*(?:rs\\.?|inr|\\$)?\\s*(\\d+(?:\\.\\d+)?)`, 'ig'),
+      // "test1: 80" / "test1 = 80"
+      new RegExp(`${escaped}\\b\\s*[:=-]\\s*(?:rs\\.?|inr|\\$)?\\s*(\\d+(?:\\.\\d+)?)`, 'ig'),
+    ];
+
+    for (const pattern of patterns) {
+      let match: RegExpExecArray | null = null;
+      while ((match = pattern.exec(rawInput)) !== null) {
+        const amount = Number(match[1]);
+        if (Number.isFinite(amount) && amount >= 0) {
+          splitMap.set(member.userId, amount);
+        }
+      }
+    }
+  }
+
+  return splitMap;
+};
+
 export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
@@ -94,20 +151,81 @@ export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
         throw new Error(responseData?.error || 'AI parsing failed.');
       }
       const result = responseData.data as ParsedExpense;
+      const finalDescription =
+        result.description && normalizeName(result.description) !== 'expense'
+          ? result.description
+          : deriveDescriptionFromInput(input);
 
-      const payer = members.find(m => (m.nickname || '').toLowerCase() === result.paidBy.toLowerCase());
+      const payer = members.find(m => normalizeName(m.nickname || '') === normalizeName(result.paidBy || ''));
       if (!payer) throw new Error(`Could not find member matching: ${result.paidBy}`);
 
-      const participants = result.participants.map(name => {
-        const member = members.find(m => (m.nickname || '').toLowerCase() === name.toLowerCase());
-        if (!member) return null;
-        
-        const custom = result.customSplits?.find(s => s.member.toLowerCase() === name.toLowerCase());
-        if (custom) return { userId: member.userId, amount: custom.amount };
+      const participantMembers = result.participants
+        .map((name) => members.find((m) => normalizeName(m.nickname || '') === normalizeName(name || '')))
+        .filter((member): member is (typeof members)[number] => !!member);
 
-        const splitAmount = result.amount / result.participants.length;
-        return { userId: member.userId, amount: splitAmount };
-      }).filter(p => p !== null);
+      const customSplitMap = new Map<string, number>();
+      for (const split of result.customSplits || []) {
+        const member = members.find((m) => normalizeName(m.nickname || '') === normalizeName(split.member || ''));
+        if (member && Number.isFinite(split.amount) && split.amount >= 0) {
+          customSplitMap.set(member.userId, split.amount);
+        }
+      }
+
+      // Deterministic fallback: if model misses custom splits, parse user text directly.
+      if (customSplitMap.size === 0) {
+        const parsedFromText = parseCustomSplitsFromText(input, members);
+        parsedFromText.forEach((value, key) => customSplitMap.set(key, value));
+      }
+
+      if (customSplitMap.size > 0) {
+        // Ensure participants include all custom-specified members.
+        for (const member of members) {
+          if (customSplitMap.has(member.userId) && !participantMembers.some((p) => p.userId === member.userId)) {
+            participantMembers.push(member);
+          }
+        }
+      }
+      let participants: Array<{ userId: string; amount: number }> = [];
+      const customTotal = round2(Array.from(customSplitMap.values()).reduce((sum, value) => sum + value, 0));
+
+      if (customSplitMap.size > 0 && customTotal <= result.amount + 0.01) {
+        // If custom splits are provided, treat unspecified remainder as payer's own share.
+        const hasPayer = participantMembers.some((p) => p.userId === payer.userId);
+        if (!hasPayer) participantMembers.push(payer);
+
+        const payerExplicitAmount = customSplitMap.get(payer.userId);
+        if (payerExplicitAmount === undefined) {
+          const payerShare = round2(Math.max(0, result.amount - customTotal));
+          customSplitMap.set(payer.userId, payerShare);
+        }
+
+        participants = participantMembers.map((member) => ({
+          userId: member.userId,
+          amount: round2(customSplitMap.get(member.userId) ?? 0),
+        }));
+      } else {
+        const participantsWithoutCustom = participantMembers.filter((m) => !customSplitMap.has(m.userId));
+        const remainingAmount = Math.max(0, result.amount - customTotal);
+        const equalFallbackShare =
+          participantsWithoutCustom.length > 0 ? remainingAmount / participantsWithoutCustom.length : 0;
+
+        participants = participantMembers.map((member) => ({
+          userId: member.userId,
+          amount: round2(customSplitMap.get(member.userId) ?? equalFallbackShare),
+        }));
+      }
+
+      // Keep participant sum exactly aligned with total amount.
+      const allocated = round2(participants.reduce((sum, p) => sum + p.amount, 0));
+      const diff = round2(result.amount - allocated);
+      if (Math.abs(diff) > 0.001 && participants.length > 0) {
+        const payerIdx = participants.findIndex((p) => p.userId === payer.userId);
+        const idx = payerIdx >= 0 ? payerIdx : 0;
+        participants[idx] = {
+          ...participants[idx],
+          amount: round2(Math.max(0, participants[idx].amount + diff)),
+        };
+      }
 
       if (participants.length === 0) {
         throw new Error("No valid group members identified as participants.");
@@ -119,7 +237,7 @@ export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
       const expenseData = {
         id: expenseId,
         groupId: group.id,
-        description: result.description,
+        description: finalDescription,
         totalAmount: result.amount,
         amount: result.amount,
         paidById: payer.userId,
@@ -139,7 +257,7 @@ export function AIExpenseForm({ group, members }: AIExpenseFormProps) {
         }));
       });
 
-      toast({ title: 'AI successfully parsed expense!', description: `Recorded "${result.description}" for $${result.amount}` });
+      toast({ title: 'AI successfully parsed expense!', description: `Recorded "${finalDescription}" for $${result.amount}` });
       setOpen(false);
       setInput('');
     } catch (err: any) {
