@@ -1,7 +1,12 @@
 import type {NextConfig} from 'next';
+import path from 'path';
 
 const nextConfig: NextConfig = {
   /* config options here */
+  turbopack: {
+    // Force Next.js to use this app directory as root so .env.local is loaded from here.
+    root: path.join(__dirname),
+  },
   typescript: {
     ignoreBuildErrors: true,
   },
