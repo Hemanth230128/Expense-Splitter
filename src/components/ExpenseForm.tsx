@@ -28,6 +28,7 @@ export function ExpenseForm({ group, members, currentUser }: ExpenseFormProps) {
   const [involvedUsers, setInvolvedUsers] = useState<string[]>(members.map(m => m.userId));
   const [splitType, setSplitType] = useState<'equal' | 'custom'>('equal');
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
+  const [manuallyEditedUsers, setManuallyEditedUsers] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const db = useFirestore();
@@ -38,8 +39,60 @@ export function ExpenseForm({ group, members, currentUser }: ExpenseFormProps) {
       const newCustom: Record<string, string> = {};
       involvedUsers.forEach(id => newCustom[id] = splitAmount);
       setCustomAmounts(newCustom);
+      setManuallyEditedUsers({});
     }
   }, [amount, involvedUsers, splitType]);
+
+  useEffect(() => {
+    if (splitType !== 'custom') return;
+    // Keep manual flags only for currently involved users.
+    setManuallyEditedUsers((prev) => {
+      const next: Record<string, boolean> = {};
+      involvedUsers.forEach((id) => {
+        if (prev[id]) next[id] = true;
+      });
+      return next;
+    });
+  }, [involvedUsers, splitType]);
+
+  const handleCustomAmountChange = (userId: string, value: string) => {
+    if (splitType !== 'custom') {
+      setCustomAmounts({ ...customAmounts, [userId]: value });
+      return;
+    }
+
+    const total = parseFloat(amount);
+    if (!Number.isFinite(total) || total <= 0) {
+      setCustomAmounts({ ...customAmounts, [userId]: value });
+      return;
+    }
+
+    const entered = Math.max(0, parseFloat(value || '0') || 0);
+    const updatedManual = { ...manuallyEditedUsers, [userId]: true };
+    const lockedUsers = involvedUsers.filter((id) => updatedManual[id]);
+
+    const next: Record<string, string> = { ...customAmounts, [userId]: value };
+
+    const lockedTotal = lockedUsers.reduce((sum, id) => {
+      if (id === userId) return sum + entered;
+      return sum + Math.max(0, parseFloat(next[id] || '0') || 0);
+    }, 0);
+
+    const autoUsers = involvedUsers.filter((id) => !updatedManual[id]);
+    if (autoUsers.length > 0) {
+      const remainingCents = Math.max(0, Math.round((total - lockedTotal) * 100));
+      const baseCents = Math.floor(remainingCents / autoUsers.length);
+      const lastExtra = remainingCents - baseCents * autoUsers.length;
+
+      autoUsers.forEach((id, idx) => {
+        const cents = baseCents + (idx === autoUsers.length - 1 ? lastExtra : 0);
+        next[id] = (cents / 100).toFixed(2);
+      });
+    }
+
+    setCustomAmounts(next);
+    setManuallyEditedUsers(updatedManual);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,6 +153,7 @@ export function ExpenseForm({ group, members, currentUser }: ExpenseFormProps) {
     setInvolvedUsers(members.map(m => m.userId));
     setSplitType('equal');
     setCustomAmounts({});
+    setManuallyEditedUsers({});
   };
 
   return (
@@ -171,7 +225,7 @@ export function ExpenseForm({ group, members, currentUser }: ExpenseFormProps) {
                           type="number" 
                           step="0.01" 
                           value={customAmounts[member.userId] || ''} 
-                          onChange={(e) => setCustomAmounts({...customAmounts, [member.userId]: e.target.value})}
+                          onChange={(e) => handleCustomAmountChange(member.userId, e.target.value)}
                           disabled={splitType === 'equal'}
                         />
                       </div>
