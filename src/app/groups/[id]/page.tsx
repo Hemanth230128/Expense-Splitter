@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,6 +53,7 @@ export default function GroupPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [isExiting, setIsExiting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedExpense, setSelectedExpense] = useState<any | null>(null);
 
   const balances = useMemo(() => {
     if (!members) return [];
@@ -196,6 +198,9 @@ export default function GroupPage() {
     }
   };
 
+  const getMemberName = (userId?: string) =>
+    members?.find((m) => m.userId === userId)?.nickname || 'Unknown';
+
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
@@ -297,7 +302,12 @@ export default function GroupPage() {
             <div className="space-y-3">
               {sortedExpenses.length > 0 ? (
                 sortedExpenses.map(exp => (
-                  <div key={exp.id} className="glass-card p-4 rounded-2xl flex items-center justify-between hover:border-white/10 transition-colors">
+                  <button
+                    key={exp.id}
+                    type="button"
+                    onClick={() => setSelectedExpense(exp)}
+                    className="w-full text-left glass-card p-4 rounded-2xl flex items-center justify-between hover:border-white/10 transition-colors"
+                  >
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 rounded-xl bg-white/5 flex flex-col items-center justify-center border border-white/5">
                         <span className="text-[10px] font-bold text-muted-foreground uppercase">
@@ -323,7 +333,7 @@ export default function GroupPage() {
                       </div>
                       <div className="text-[10px] text-muted-foreground uppercase tracking-widest">Total Amount</div>
                     </div>
-                  </div>
+                  </button>
                 ))
               ) : (
                 <div className="text-center py-20 text-muted-foreground">
@@ -354,6 +364,53 @@ export default function GroupPage() {
           </TabsContent>
         </Tabs>
       </main>
+
+      <Dialog open={!!selectedExpense} onOpenChange={(open) => !open && setSelectedExpense(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Expense Details</DialogTitle>
+          </DialogHeader>
+
+          {selectedExpense && (
+            <div className="space-y-4">
+              <div className="rounded-lg border p-3 bg-muted/20">
+                <p className="text-xs text-muted-foreground mb-1">Description</p>
+                <p className="font-semibold">{selectedExpense.description || 'Expense'}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border p-3 bg-muted/20">
+                  <p className="text-xs text-muted-foreground mb-1">Paid By</p>
+                  <p className="font-semibold">{getMemberName(selectedExpense.paidById || selectedExpense.paidBy)}</p>
+                </div>
+                <div className="rounded-lg border p-3 bg-muted/20">
+                  <p className="text-xs text-muted-foreground mb-1">Total Amount</p>
+                  <p className="font-semibold">${(selectedExpense.totalAmount || selectedExpense.amount || 0).toFixed(2)}</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-3 bg-muted/20">
+                <p className="text-xs text-muted-foreground mb-1">Date</p>
+                <p className="font-semibold">
+                  {new Date(selectedExpense.expenseDate || selectedExpense.date).toLocaleString()}
+                </p>
+              </div>
+
+              <div className="rounded-lg border p-3 bg-muted/20">
+                <p className="text-xs text-muted-foreground mb-2">Split Details</p>
+                <div className="space-y-2">
+                  {(selectedExpense.participants || []).map((participant: any) => (
+                    <div key={participant.userId} className="flex items-center justify-between text-sm">
+                      <span>{getMemberName(participant.userId)}</span>
+                      <span className="font-medium">${Number(participant.amount || 0).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
